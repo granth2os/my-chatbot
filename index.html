@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AuxBot</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <header class="header">
+      <div class="brand">
+        <span class="brand-emoji" id="botEmoji"></span>
+        <div>
+          <h1 class="brand-name" id="botName"></h1>
+          <p class="brand-tagline" id="botTagline"></p>
+        </div>
+      </div>
+      <div class="header-buttons">
+        <button type="button" id="newChatBtn" class="btn btn-ghost">New chat</button>
+        <button type="button" id="keyBtn" class="btn btn-ghost">API key</button>
+      </div>
+    </header>
+
+    <main class="messages" id="messages" aria-live="polite"></main>
+
+    <div class="starters" id="starters"></div>
+
+    <form class="composer" id="composer">
+      <textarea
+        id="input"
+        rows="1"
+        placeholder="Type a message… (Enter to send, Shift+Enter for a new line)"
+        aria-label="Message"
+      ></textarea>
+      <button type="submit" id="sendBtn" class="btn btn-primary">Send</button>
+    </form>
+
+  </div>
+
+  <!-- Pop-up for pasting the API key -->
+  <dialog id="keyDialog" class="dialog">
+    <form method="dialog" id="keyForm">
+      <h2>Your Gemini API key</h2>
+      <p class="dialog-text">
+        Paste your key below. It is never saved in the website's code.
+        You can get a free key at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a>.
+      </p>
+      <input type="password" id="keyInput" placeholder="Paste API key here" autocomplete="off" />
+      <label class="remember">
+        <input type="checkbox" id="rememberBox" />
+        Remember on this device
+      </label>
+      <div class="dialog-buttons">
+        <button type="button" id="keyClear" class="btn btn-ghost">Remove key</button>
+        <button type="button" id="keyCancel" class="btn btn-ghost">Cancel</button>
+        <button type="submit" id="keySave" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="config.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
