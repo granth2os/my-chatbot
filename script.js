@@ -120,6 +120,27 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+// Makes the little "Copy" button that sits under each bot message
+function makeCopyButton(text) {
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "copy-btn";
+  copyBtn.textContent = "Copy";
+
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      copyBtn.textContent = "Copied!";
+    } catch (e) {
+      copyBtn.textContent = "Couldn't copy";
+    }
+    // Change the label back after a moment
+    setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+  });
+
+  return copyBtn;
+}
+
 function addBubble(kind, text) {
   const div = document.createElement("div");
   div.className = "bubble " + kind;
@@ -127,6 +148,7 @@ function addBubble(kind, text) {
     div.textContent = text;            // user text is shown as plain text
   } else if (kind === "bot") {
     div.innerHTML = formatText(text);  // escaped first, then formatted
+    div.appendChild(makeCopyButton(text));  // add the copy button
   } else {
     div.textContent = text;            // error messages
   }
