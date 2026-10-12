@@ -306,3 +306,18 @@ body {
   .bubble.user { border: 1px solid #7a5cc4; }
   .starter { border-color: #7a5cc4; }
 }
+.copy-btn {
+  display: block;
+  margin-top: 8px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
