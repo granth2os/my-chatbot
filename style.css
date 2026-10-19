@@ -6,7 +6,7 @@
   --text: #1f1f23;
   --muted: #6b6b76;
   --border: #e2e2e8;
-  --bot-bubble: #2b1a4a;
+  --bot-bubble: #ffffff;
   --user-text: #ffffff;
 }
 
@@ -90,6 +90,17 @@ body {
   gap: 8px;
   flex-shrink: 0;
 }
+
+/* ---------- Status line (under the header) ---------- */
+.status {
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.status:empty { display: none; }
 
 /* ---------- Buttons ---------- */
 .btn {
@@ -175,6 +186,28 @@ body {
     color: #ffb4b4;
     border-color: #6b2b30;
   }
+}
+
+/* ---------- "Sources" section under replies ---------- */
+.sources {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.sources summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.source { margin-top: 8px; }
+
+.source-title { font-weight: 600; }
+
+.source-text {
+  color: var(--muted);
+  white-space: pre-wrap;
 }
 
 /* ---------- "Thinking" animation ---------- */
@@ -305,19 +338,4 @@ body {
 @media (prefers-color-scheme: dark) {
   .bubble.user { border: 1px solid #7a5cc4; }
   .starter { border-color: #7a5cc4; }
-}
-.copy-btn {
-  display: block;
-  margin-top: 8px;
-  padding: 4px 10px;
-  font-size: 0.8rem;
-  color: white;
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.copy-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
 }
