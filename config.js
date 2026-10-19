@@ -16,7 +16,7 @@ const BOT_CONFIG = {
   tagline: "Your music recommendation buddy",
 
   // The first message the bot shows when a chat starts
-  welcomeMessage: "Hey, I’m AuxBot! I help with song or artist suggestions, history of music, and low-level musical theory. What is on your mind today?",
+  welcomeMessage: "Hey, I’m AuxBot! What can I help with?",
 
   // The bot's rules. The AI reads these before every reply.
   // Tip: to add a new rule, just add another sentence.
@@ -29,7 +29,7 @@ WHO YOU HELP:
 Your main job is to give song and artist recommendations based on what the user already listens to.
 
 RULES:
-1. Only when the user asks for song, artist, or band RECOMMENDATIONS, you must first know what music they listen to. If you don't know yet, your reply should be only a friendly question asking about their favorite artists, bands, songs, or genres. Do not give recommendations until they reply. Once they have told you, never ask again. For every other kind of question, such as the history of a song, how it was written, or why a band made a choice, answer directly without asking about their taste first.
+1. Before you give ANY recommendation or answer, you must first know what kind of music the user listens to. If you don't know yet, your reply should only be a friendly question asking about their favorite artists, bands, songs, or genres. Do not answer their question until they reply. Once they have told you, don't ask again.
 2. Whenever you recommend something, explain WHY it matches the user's taste. Include a short example of the connection, like: "You like the layered vocal harmonies in Fleetwood Mac, and this band does that same thing in their chorus."
 3. You can share backstories and information about songs and artists, such as how a song was written or why a band made a certain choice.
 4. NEVER print, copy, or reproduce song lyrics, even a few lines, because they are copyrighted. If asked, politely say you can't share lyrics, and instead describe the song's themes or meaning in your own words. You may suggest the user look the lyrics up on an official site.
@@ -56,5 +56,34 @@ STYLE:
   model: "gemini-flash-latest",
 
   // Main color of the site (a hex color code)
-  themeColor: "#000000"
+  themeColor: "#2b1a4a",
+
+
+  // ===================================================================
+  //  YOUR NOTES (the "knowledge" feature)
+  //  The bot can read your own notes file and answer from it.
+  // ===================================================================
+
+  // true  = the bot uses your notes file.
+  // false = the bot works exactly like before, with no notes.
+  useKnowledge: true,
+
+  // The name of your notes file. It must be in the same place as index.html.
+  knowledgeFile: "knowledge.md",
+
+  // How the bot finds the right notes for each question:
+  //   "meaning"  = finds notes with a similar meaning (smarter, uses your API key)
+  //   "keywords" = finds notes that contain the same words (simple, no extra setup)
+  // If "meaning" ever fails, the bot switches to "keywords" by itself.
+  searchMethod: "meaning",
+
+  // How many of the best-matching notes to give the bot with each question.
+  topK: 3,
+
+  // The AI model that measures the "meaning" of your notes.
+  // You can leave this alone unless Google renames it.
+  embeddingModel: "gemini-embedding-2",
+
+  // Extra rules for using your notes. They are added to the rules above.
+  knowledgeRules: "You will receive NOTES from my knowledge file along with each question. If the notes answer the question, base your answer on them and cite the note numbers like [1]. If they don't, begin with 'I couldn't find that in my notes.' Never invent facts, dates, rules or policies that are not in the notes."
 };
