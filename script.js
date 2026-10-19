@@ -17,10 +17,14 @@ const keyInput    = document.getElementById("keyInput");
 const rememberBox = document.getElementById("rememberBox");
 const keyCancel   = document.getElementById("keyCancel");
 const keyClear    = document.getElementById("keyClear");
+const statusEl    = document.getElementById("statusLine");
 
-const KEY_NAME = "gemini_api_key";
+const KEY_NAME   = "gemini_api_key";
+const CACHE_NAME = "auxbot_knowledge_cache_v1";
+const API_BASE   = "https://generativelanguage.googleapis.com/v1beta/models/";
 
-// The conversation so far, in the format Gemini expects
+// The conversation so far (your plain questions and the bot's replies).
+// The notes are NOT stored here. They are only added to the latest question.
 let history = [];
 let isBusy = false;
 
@@ -77,8 +81,316 @@ keyClear.addEventListener("click", () => {
 
 keyForm.addEventListener("submit", () => {
   const key = keyInput.value.trim();
-  if (key) saveKey(key, rememberBox.checked);
+  if (key) {
+    saveKey(key, rememberBox.checked);
+    // A new key was saved, so (re)start the notes setup
+    kbReady = loadKnowledge();
+  }
 });
+
+// =====================================================================
+//  KNOWLEDGE (your notes file)
+// =====================================================================
+
+// Everything about the loaded notes lives here
+let kb = { notes: [], vectors: null, mode: "keywords" };
+let kbLoadId = 0;               // used to ignore out-of-date loads
+let kbReady = Promise.resolve(); // lets a question wait until notes are ready
+
+function setStatus(text) {
+  statusEl.textContent = text;
+}
+
+function noteCountText(count) {
+  return count + (count === 1 ? " note" : " notes");
+}
+
+function knowledgeIsOn() {
+  return BOT_CONFIG.useKnowledge && kb.notes.length > 0;
+}
+
+// ---------- Reading the notes file ----------
+// Each note starts with a line like "## Note title".
+// Anything above the first "##" line is ignored.
+// Notes longer than about 1,500 characters are split at blank lines.
+function splitLong(body, maxLength) {
+  if (body.length <= maxLength) return [body];
+
+  const paragraphs = body.split(/\n\s*\n/);
+  const chunks = [];
+  let current = "";
+
+  for (const p of paragraphs) {
+    if (current && current.length + 2 + p.length > maxLength) {
+      chunks.push(current);
+      current = p;
+    } else {
+      current = current ? current + "\n\n" + p : p;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function parseNotes(raw) {
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
+  const found = [];
+  let current = null;
+
+  for (const line of lines) {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    if (match) {
+      current = { title: match[1], lines: [] };
+      found.push(current);
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+
+  const notes = [];
+  for (const item of found) {
+    const body = item.lines.join("\n").trim();
+    if (!body) continue; // skip notes with no text
+    const parts = splitLong(body, 1500);
+    parts.forEach((part, i) => {
+      const title = parts.length > 1
+        ? item.title + " (part " + (i + 1) + " of " + parts.length + ")"
+        : item.title;
+      notes.push({ title: title, text: part });
+    });
+  }
+  return notes;
+}
+
+// ---------- A small "fingerprint" of the notes file ----------
+// If the file changes, the fingerprint changes, and the notes are re-measured.
+function makeFingerprint(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16) + "-" + text.length;
+}
+
+// ---------- Embeddings (turning text into numbers that capture meaning) ----------
+function roundVector(values) {
+  return values.map((v) => Math.round(v * 1e6) / 1e6);
+}
+
+async function embedTexts(texts, key) {
+  const model = BOT_CONFIG.embeddingModel;
+  const url = API_BASE + encodeURIComponent(model) + ":batchEmbedContents";
+  const all = [];
+
+  // At most 50 texts per request
+  for (let i = 0; i < texts.length; i += 50) {
+    const batch = texts.slice(i, i + 50);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": key
+      },
+      body: JSON.stringify({
+        requests: batch.map((t) => ({
+          model: "models/" + model,
+          content: { parts: [{ text: t }] }
+        }))
+      })
+    });
+
+    if (!response.ok) {
+      const err = new Error("HTTP error");
+      err.status = response.status;
+      throw err;
+    }
+
+    const data = await response.json();
+    const list = data.embeddings || [];
+    if (list.length !== batch.length) {
+      throw new Error("Unexpected embedding response");
+    }
+    for (const item of list) all.push(roundVector(item.values));
+  }
+  return all;
+}
+
+// Get the notes' vectors from saved storage, or make them fresh
+async function getVectors(fileText, notes, key) {
+  const fingerprint = makeFingerprint(BOT_CONFIG.embeddingModel + "|" + fileText);
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(CACHE_NAME) || "null");
+    if (
+      saved &&
+      saved.fingerprint === fingerprint &&
+      Array.isArray(saved.vectors) &&
+      saved.vectors.length === notes.length
+    ) {
+      return saved.vectors;
+    }
+  } catch (e) {}
+
+  const texts = notes.map((n) => "title: " + n.title + " | text: " + n.text);
+  const vectors = await embedTexts(texts, key);
+
+  try {
+    localStorage.setItem(CACHE_NAME, JSON.stringify({ fingerprint: fingerprint, vectors: vectors }));
+  } catch (e) {}
+
+  return vectors;
+}
+
+// ---------- Loading everything when the page opens ----------
+async function loadKnowledge() {
+  if (!BOT_CONFIG.useKnowledge) {
+    setStatus("");
+    return;
+  }
+
+  const myId = ++kbLoadId;
+  kb = { notes: [], vectors: null, mode: "keywords" };
+  setStatus("📚 Loading notes…");
+
+  let fileText;
+  try {
+    const response = await fetch(BOT_CONFIG.knowledgeFile, { cache: "no-cache" });
+    if (!response.ok) throw new Error("File not found");
+    fileText = await response.text();
+  } catch (e) {
+    if (myId !== kbLoadId) return;
+    setStatus(
+      "⚠️ Couldn’t load " + BOT_CONFIG.knowledgeFile +
+      ". Check the file name and that it’s in your repository next to index.html. " +
+      "(Opening index.html by double-clicking also blocks this. Use your GitHub Pages link.) " +
+      "Chatting without notes."
+    );
+    return;
+  }
+  if (myId !== kbLoadId) return;
+
+  const notes = parseNotes(fileText);
+  if (notes.length === 0) {
+    setStatus(
+      "⚠️ " + BOT_CONFIG.knowledgeFile +
+      " was found, but it has no notes. Start each note with a line like “## Note title”. Chatting without notes."
+    );
+    return;
+  }
+  kb.notes = notes;
+  const count = noteCountText(notes.length);
+
+  if (BOT_CONFIG.searchMethod !== "meaning") {
+    kb.mode = "keywords";
+    setStatus("📚 " + count + " loaded · keyword search");
+    return;
+  }
+
+  const key = getKey();
+  if (!key) {
+    setStatus("📚 " + count + " loaded · keyword search for now (add your API key for meaning search)");
+    return;
+  }
+
+  setStatus("📚 " + count + " loaded · preparing meaning search…");
+  try {
+    const vectors = await getVectors(fileText, notes, key);
+    if (myId !== kbLoadId) return;
+    kb.vectors = vectors;
+    kb.mode = "meaning";
+    setStatus("📚 " + count + " loaded · meaning search");
+  } catch (e) {
+    if (myId !== kbLoadId) return;
+    kb.vectors = null;
+    kb.mode = "keywords";
+    setStatus("📚 " + count + " loaded · keyword search (meaning search didn’t work)");
+  }
+}
+
+// ---------- Finding the best notes for a question ----------
+function cosine(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+const STOP_WORDS = new Set([
+  "the", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "was",
+  "were", "be", "what", "which", "who", "how", "why", "when", "where", "do",
+  "does", "did", "can", "you", "it", "this", "that", "with", "as", "at", "by",
+  "from", "about", "me", "my", "your", "some", "any"
+]);
+
+function tokenize(text) {
+  const words = text.toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+  return words.filter((w) => w.length > 1 && !STOP_WORDS.has(w));
+}
+
+function keywordSearch(question, k) {
+  const terms = Array.from(new Set(tokenize(question)));
+  if (terms.length === 0) return [];
+
+  const scored = kb.notes.map((note) => {
+    const title = note.title.toLowerCase();
+    const body = note.text.toLowerCase();
+    let raw = 0;
+    for (const term of terms) {
+      if (title.includes(term)) raw += 3;
+      const hits = body.split(term).length - 1;
+      raw += Math.min(hits, 5);
+    }
+    return { title: note.title, text: note.text, score: Math.min(raw / (terms.length * 8), 1) };
+  }).filter((n) => n.score > 0);
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, k);
+}
+
+async function findNotes(question, key) {
+  const k = Math.max(1, Number(BOT_CONFIG.topK) || 3);
+
+  if (kb.mode === "meaning" && kb.vectors) {
+    try {
+      const result = await embedTexts(["task: search result | query: " + question], key);
+      const queryVector = result[0];
+      const scored = kb.notes.map((note, i) => ({
+        title: note.title,
+        text: note.text,
+        score: cosine(queryVector, kb.vectors[i])
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, k);
+    } catch (e) {
+      // Meaning search failed, so switch to keyword search automatically
+      kb.mode = "keywords";
+      kb.vectors = null;
+      setStatus("📚 " + noteCountText(kb.notes.length) + " loaded · keyword search (meaning search didn’t work)");
+    }
+  }
+
+  return keywordSearch(question, k);
+}
+
+// ---------- Putting the notes together with the question ----------
+function buildPrompt(question, notes) {
+  let text = "NOTES:\n";
+  if (notes.length === 0) {
+    text += "(No matching notes were found.)\n";
+  } else {
+    notes.forEach((n, i) => {
+      text += "[" + (i + 1) + "] " + n.title + "\n" + n.text + "\n\n";
+    });
+  }
+  text += "\nQUESTION: " + question;
+  return text;
+}
 
 // ---------- Safe text formatting ----------
 // Step 1: escape HTML so nothing sneaky can run.
@@ -120,27 +432,6 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// Makes the little "Copy" button that sits under each bot message
-function makeCopyButton(text) {
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "copy-btn";
-  copyBtn.textContent = "Copy";
-
-  copyBtn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      copyBtn.textContent = "Copied!";
-    } catch (e) {
-      copyBtn.textContent = "Couldn't copy";
-    }
-    // Change the label back after a moment
-    setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
-  });
-
-  return copyBtn;
-}
-
 function addBubble(kind, text) {
   const div = document.createElement("div");
   div.className = "bubble " + kind;
@@ -148,13 +439,46 @@ function addBubble(kind, text) {
     div.textContent = text;            // user text is shown as plain text
   } else if (kind === "bot") {
     div.innerHTML = formatText(text);  // escaped first, then formatted
-    div.appendChild(makeCopyButton(text));  // add the copy button
   } else {
     div.textContent = text;            // error messages
   }
   messagesEl.appendChild(div);
   scrollToBottom();
   return div;
+}
+
+// A small "Sources" section (click to open) under a reply
+function addSources(bubble, notes) {
+  if (!notes || notes.length === 0) return;
+
+  const details = document.createElement("details");
+  details.className = "sources";
+
+  const summary = document.createElement("summary");
+  summary.textContent = "Sources (" + notes.length + ")";
+  details.appendChild(summary);
+
+  notes.forEach((note, i) => {
+    const item = document.createElement("div");
+    item.className = "source";
+
+    const title = document.createElement("div");
+    title.className = "source-title";
+    title.textContent = "[" + (i + 1) + "] " + note.title + " · score " + note.score.toFixed(2);
+
+    const snippet = document.createElement("div");
+    snippet.className = "source-text";
+    snippet.textContent = note.text.length > 200
+      ? note.text.slice(0, 200).trim() + "…"
+      : note.text;
+
+    item.appendChild(title);
+    item.appendChild(snippet);
+    details.appendChild(item);
+  });
+
+  bubble.appendChild(details);
+  scrollToBottom();
 }
 
 function addThinking() {
@@ -210,11 +534,27 @@ function errorForStatus(status) {
 }
 
 // ---------- Talking to Gemini ----------
-async function askGemini(key) {
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-    encodeURIComponent(BOT_CONFIG.model) +
-    ":generateContent";
+async function askGemini(key, notes) {
+  const url = API_BASE + encodeURIComponent(BOT_CONFIG.model) + ":generateContent";
+
+  const useNotes = knowledgeIsOn();
+
+  // Bot rules (plus the notes rules when notes are in use)
+  const systemText = useNotes
+    ? BOT_CONFIG.systemInstructions + "\n\n" + BOT_CONFIG.knowledgeRules
+    : BOT_CONFIG.systemInstructions;
+
+  // History holds only plain questions. The notes are added to the latest one.
+  const contents = history.slice(0, -1);
+  const lastQuestion = history[history.length - 1];
+  if (useNotes) {
+    contents.push({
+      role: "user",
+      parts: [{ text: buildPrompt(lastQuestion.parts[0].text, notes) }]
+    });
+  } else {
+    contents.push(lastQuestion);
+  }
 
   const response = await fetch(url, {
     method: "POST",
@@ -223,8 +563,8 @@ async function askGemini(key) {
       "x-goog-api-key": key
     },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: BOT_CONFIG.systemInstructions }] },
-      contents: history
+      systemInstruction: { parts: [{ text: systemText }] },
+      contents: contents
     })
   });
 
@@ -278,9 +618,17 @@ async function sendMessage(text) {
   const thinkingBubble = addThinking();
 
   try {
-    const reply = await askGemini(key);
+    // Find the best notes for this question (if notes are turned on)
+    let usedNotes = [];
+    if (BOT_CONFIG.useKnowledge) {
+      await kbReady;
+      if (knowledgeIsOn()) usedNotes = await findNotes(text, key);
+    }
+
+    const reply = await askGemini(key, usedNotes);
     thinkingBubble.remove();
-    addBubble("bot", reply);
+    const bubble = addBubble("bot", reply);
+    addSources(bubble, usedNotes);
     history.push({ role: "model", parts: [{ text: reply }] });
   } catch (err) {
     thinkingBubble.remove();
@@ -339,3 +687,4 @@ newChatBtn.addEventListener("click", startNewChat);
 
 // ---------- Start ----------
 startNewChat();
+kbReady = loadKnowledge();
